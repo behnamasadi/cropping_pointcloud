@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package>
+  <name>cropping_pointcloud</name>
+  <version>0.0.0</version>
+  <description>The cropping_pointcloud package</description>
+  <maintainer email="behnam.asadi@gmail.com">Behnam Asadi</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <build_depend>tf</build_depend>
+  <build_depend>dynamic_reconfigure</build_depend>
+
+
+  <run_depend>roscpp</run_depend>
+  <run_depend>tf</run_depend>
+  <run_depend>dynamic_reconfigure</run_depend>
+  <export>
+  </export>
+</package>
