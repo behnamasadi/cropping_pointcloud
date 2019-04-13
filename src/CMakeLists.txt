@@ -8,9 +8,12 @@ find_package(catkin REQUIRED COMPONENTS roscpp rospy tf dynamic_reconfigure)
 
 generate_dynamic_reconfigure_options( cfg/croppingCloud.cfg )
 catkin_package()
-set(PCL_DIR "$ENV{HOME}/usr/share/pcl-1.8/")
+#set(PCL_DIR "$ENV{HOME}/usr/share/pcl-1.8/")
 MESSAGE("PCL_DIR:" ${PCL_DIR} )
-find_package(PCL 1.8.0 REQUIRED COMPONENTS common octree io kdtree search sample_consensus filters 2d features registration geometry visualization outofcore surface keypoints ml segmentation recognition people tracking stereo)
+#find_package(PCL 1.8.0 REQUIRED COMPONENTS common octree io kdtree search sample_consensus filters 2d features registration geometry visualization outofcore surface keypoints ml segmentation recognition people tracking stereo)
+
+
+find_package(PCL 1.7 REQUIRED COMPONENTS common octree io kdtree search sample_consensus filters 2d  geometry visualization  surface segmentation)
 
 
 MESSAGE("PCL_FOUND:" ${PCL_FOUND})
