@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main, ros2-migration]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    container:
+      image: osrf/ros:humble-desktop-full
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install package dependencies
+        shell: bash
+        run: |
+          apt-get update -qq
+          rosdep update --rosdistro humble
+          rosdep install --from-paths . --ignore-src -y
+
+      - name: Build with colcon
+        shell: bash
+        run: |
+          mkdir -p /tmp/ws/src/cropping_pointcloud
+          cp -r . /tmp/ws/src/cropping_pointcloud/
+          source /opt/ros/humble/setup.bash
+          cd /tmp/ws
+          colcon build --event-handlers console_direct+
+
+      - name: Run tests
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          cd /tmp/ws
+          colcon test --event-handlers console_direct+
+          colcon test-result --verbose

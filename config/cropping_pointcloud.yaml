@@ -1,0 +1,13 @@
+cropping_pointcloud:
+  ros__parameters:
+    input_topic: camera/rgb/points
+    frame_id: ""               # empty → keep the input cloud's frame_id
+    extract_object: true
+    plane_distance_threshold: 0.02
+    plane_max_iterations: 100
+    x_min: -0.44
+    x_max:  0.30
+    y_min: -1.00
+    y_max:  0.24
+    z_min: -1.00
+    z_max:  1.08
