@@ -7,18 +7,27 @@ on:
     branches: [master, main]
 
 jobs:
-  build:
+  colcon-build:
+    name: colcon build (${{ matrix.distro }})
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [humble, jazzy]
     container:
-      image: osrf/ros:humble-desktop-full
+      image: osrf/ros:${{ matrix.distro }}-desktop-full
     steps:
       - uses: actions/checkout@v4
 
       - name: Install package dependencies
         shell: bash
         run: |
-          apt-get update -qq
-          rosdep update --rosdistro humble
+          # archive.ubuntu.com sometimes serves stale Packages.gz mid-mirror-sync.
+          # Retry apt-get update a few times before giving up.
+          for i in 1 2 3; do
+            apt-get update -qq -o Acquire::Retries=5 && break || sleep 20
+          done
+          rosdep update --rosdistro ${{ matrix.distro }}
           rosdep install --from-paths . --ignore-src -y
 
       - name: Build with colcon
@@ -26,14 +35,35 @@ jobs:
         run: |
           mkdir -p /tmp/ws/src/cropping_pointcloud
           cp -r . /tmp/ws/src/cropping_pointcloud/
-          source /opt/ros/humble/setup.bash
+          source /opt/ros/${{ matrix.distro }}/setup.bash
           cd /tmp/ws
           colcon build --event-handlers console_direct+
 
       - name: Run tests
         shell: bash
         run: |
-          source /opt/ros/humble/setup.bash
+          source /opt/ros/${{ matrix.distro }}/setup.bash
           cd /tmp/ws
           colcon test --event-handlers console_direct+
           colcon test-result --verbose
+
+  docker-compose-build:
+    name: docker compose build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # The compose file requests an NVIDIA GPU; runners don't have one.
+      # Strip the deploy: blocks so the build itself still validates.
+      - name: Strip GPU reservations for CI
+        run: |
+          python3 - <<'PY'
+          import re, pathlib
+          p = pathlib.Path("docker-compose.yml")
+          src = p.read_text()
+          src = re.sub(r"\n    deploy:\n(?:      .*\n)+", "\n", src)
+          p.write_text(src)
+          PY
+
+      - name: docker compose build
+        run: docker compose build

@@ -1,0 +1,77 @@
+name: cropping_pointcloud
+
+# Two disposable services. Real-world layout:
+#   gazebo  → "data source"  (replace with a real sensor driver in production)
+#   cropper → "perception + GUI"  (the cropping_pointcloud node + RViz + rqt)
+#
+# They exchange data over DDS exactly the way a distributed ROS 2 system would,
+# so the cropper container could just as well live on a different machine —
+# keep ROS_DOMAIN_ID identical on every host and DDS handles discovery.
+
+services:
+  # ───────────── data source: Gazebo headless + ros_gz_bridge ─────────────
+  gazebo:
+    build:
+      context: .
+      dockerfile: docker/gazebo.Dockerfile
+      args:
+        ROS_DISTRO: ${ROS_DISTRO:-humble}
+        GZ_PKG: ${GZ_PKG:-ignition-fortress}
+    image: cropping_pointcloud/gazebo:${ROS_DISTRO:-humble}
+    network_mode: host
+    ipc: host
+    privileged: true
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+      GZ_CMD: ${GZ_CMD:-ign gazebo}
+      DISPLAY: ${DISPLAY}
+      QT_X11_NO_MITSHM: 1
+      XDG_RUNTIME_DIR: /tmp/runtime-root
+      NVIDIA_DRIVER_CAPABILITIES: all
+      NVIDIA_VISIBLE_DEVICES: all
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    devices:
+      - /dev/dri:/dev/dri
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ───────────── perception + GUI: node + RViz + rqt as one unit ─────────────
+  cropper:
+    build:
+      context: .
+      dockerfile: docker/cropper.Dockerfile
+      args:
+        ROS_DISTRO: ${ROS_DISTRO:-humble}
+    image: cropping_pointcloud/cropper:${ROS_DISTRO:-humble}
+    network_mode: host
+    ipc: host
+    privileged: true
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+      DISPLAY: ${DISPLAY}
+      QT_X11_NO_MITSHM: 1
+      XDG_RUNTIME_DIR: /tmp/runtime-root
+      NVIDIA_DRIVER_CAPABILITIES: all
+      NVIDIA_VISIBLE_DEVICES: all
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    devices:
+      - /dev/dri:/dev/dri
+    depends_on:
+      - gazebo
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # The image's CMD is `ros2 launch cropping_pointcloud cropping_demo.launch.py`
+    # which starts the node + RViz + rqt together. Override to gui:=false for
+    # headless operation.

@@ -12,6 +12,9 @@
 #include <Eigen/Core>
 
 #include <rclcpp/rclcpp.hpp>
+#include <rcl_interfaces/msg/floating_point_range.hpp>
+#include <rcl_interfaces/msg/integer_range.hpp>
+#include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 
 #include <pcl_conversions/pcl_conversions.h>
@@ -35,15 +38,18 @@ public:
     declare_parameter<std::string>("input_topic", "camera/rgb/points");
     declare_parameter<std::string>("frame_id", "");   // empty → keep input frame
     declare_parameter<bool>("extract_object", true);
-    declare_parameter<double>("plane_distance_threshold", 0.02);
-    declare_parameter<int>("plane_max_iterations", 100);
+    declare_parameter<double>("plane_distance_threshold", 0.02,
+      make_double_descriptor("RANSAC inlier distance threshold (m)", 0.001, 0.5, 0.001));
+    declare_parameter<int>("plane_max_iterations", 100,
+      make_int_descriptor("RANSAC iteration cap", 10, 1000, 1));
 
-    declare_parameter<double>("x_min", -0.44);
-    declare_parameter<double>("x_max",  0.30);
-    declare_parameter<double>("y_min", -1.00);
-    declare_parameter<double>("y_max",  0.24);
-    declare_parameter<double>("z_min", -1.00);
-    declare_parameter<double>("z_max",  1.08);
+    // Bound ranges drive rqt's slider widgets in Dynamic Reconfigure.
+    declare_parameter<double>("x_min", -0.44, make_bound_descriptor("Crop bound (m)"));
+    declare_parameter<double>("x_max",  0.30, make_bound_descriptor("Crop bound (m)"));
+    declare_parameter<double>("y_min", -1.00, make_bound_descriptor("Crop bound (m)"));
+    declare_parameter<double>("y_max",  0.24, make_bound_descriptor("Crop bound (m)"));
+    declare_parameter<double>("z_min", -1.00, make_bound_descriptor("Crop bound (m)"));
+    declare_parameter<double>("z_max",  1.08, make_bound_descriptor("Crop bound (m)"));
 
     refresh_bounds_from_parameters();
 
@@ -69,6 +75,38 @@ public:
   }
 
 private:
+  static rcl_interfaces::msg::ParameterDescriptor
+  make_double_descriptor(const std::string & desc, double lo, double hi, double step)
+  {
+    rcl_interfaces::msg::ParameterDescriptor d;
+    d.description = desc;
+    rcl_interfaces::msg::FloatingPointRange r;
+    r.from_value = lo;
+    r.to_value   = hi;
+    r.step       = step;
+    d.floating_point_range.push_back(r);
+    return d;
+  }
+
+  static rcl_interfaces::msg::ParameterDescriptor
+  make_int_descriptor(const std::string & desc, int64_t lo, int64_t hi, uint64_t step)
+  {
+    rcl_interfaces::msg::ParameterDescriptor d;
+    d.description = desc;
+    rcl_interfaces::msg::IntegerRange r;
+    r.from_value = lo;
+    r.to_value   = hi;
+    r.step       = step;
+    d.integer_range.push_back(r);
+    return d;
+  }
+
+  static rcl_interfaces::msg::ParameterDescriptor
+  make_bound_descriptor(const std::string & desc)
+  {
+    return make_double_descriptor(desc, -10.0, 10.0, 0.01);
+  }
+
   void refresh_bounds_from_parameters()
   {
     x_min_ = get_parameter("x_min").as_double();
