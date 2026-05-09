@@ -5,9 +5,12 @@
 // frame_id are exposed as ROS 2 parameters. All six bounds are live-tunable;
 // changes take effect immediately via the on-set-parameters callback.
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
+
+#include <geometry_msgs/msg/point.hpp>
 
 #include <Eigen/Core>
 
@@ -16,6 +19,8 @@
 #include <rcl_interfaces/msg/integer_range.hpp>
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/filters/crop_box.h>
@@ -32,8 +37,14 @@ using CloudT = pcl::PointCloud<PointT>;
 class CroppingPointCloud : public rclcpp::Node
 {
 public:
-  CroppingPointCloud()
-  : rclcpp::Node("cropping_pointcloud")
+  // The NodeOptions constructor lets callers pass `use_intra_process_comms=true`
+  // (and any other rclcpp::NodeOptions setting). When this node is loaded into
+  // the same ComposableNodeContainer as a publisher and intra-process comms is
+  // enabled on both, PointCloud2 messages are moved via unique_ptr — no
+  // serialization, no deserialization, no DDS round-trip. That's the ROS 2
+  // equivalent of the ROS 1 "nodelet" speed-up.
+  explicit CroppingPointCloud(const rclcpp::NodeOptions & options = rclcpp::NodeOptions{})
+  : rclcpp::Node("cropping_pointcloud", options)
   {
     declare_parameter<std::string>("input_topic", "camera/rgb/points");
     declare_parameter<std::string>("frame_id", "");   // empty → keep input frame
@@ -63,6 +74,13 @@ public:
       "cropped_cloud", rclcpp::SensorDataQoS());
     pub_object_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "object_cloud", rclcpp::SensorDataQoS());
+
+    // Marker stream for the AABB volume. Volatile durability — intra-process
+    // comms (which we want when this node is composed with the driver) is
+    // incompatible with transient_local. RViz still picks up the marker on
+    // the next cloud callback (~30 Hz), so the lag on connect is < 50 ms.
+    pub_bounds_ = create_publisher<visualization_msgs::msg::MarkerArray>(
+      "crop_bounds", rclcpp::QoS(1));
 
     param_cb_handle_ = add_on_set_parameters_callback(
       [this](const std::vector<rclcpp::Parameter> & params) {
@@ -139,11 +157,16 @@ private:
     RCLCPP_INFO(get_logger(),
       "bounds: x[%.3f, %.3f] y[%.3f, %.3f] z[%.3f, %.3f]",
       x_min_, x_max_, y_min_, y_max_, z_min_, z_max_);
+    publish_bounds_marker();
     return result;
   }
 
   void on_cloud(sensor_msgs::msg::PointCloud2::ConstSharedPtr msg)
   {
+    // Cache the input frame so the marker can be republished against the same
+    // frame on parameter changes (between cloud arrivals).
+    last_frame_id_ = msg->header.frame_id;
+
     auto input = std::make_shared<CloudT>();
     pcl::fromROSMsg(*msg, *input);
 
@@ -159,6 +182,7 @@ private:
     }
 
     publish_cloud(*cropped, msg->header, pub_cropped_);
+    publish_bounds_marker();
 
     if (get_parameter("extract_object").as_bool() && !cropped->empty()) {
       CloudT object;
@@ -166,6 +190,87 @@ private:
         publish_cloud(object, msg->header, pub_object_);
       }
     }
+  }
+
+  void publish_bounds_marker()
+  {
+    if (!pub_bounds_) return;
+    if (last_frame_id_.empty()) return;   // wait until we know which frame to draw in
+
+    const auto frame_override = get_parameter("frame_id").as_string();
+    const std::string frame =
+      frame_override.empty() ? last_frame_id_ : frame_override;
+    const auto stamp = now();
+
+    const double cx = 0.5 * (x_min_ + x_max_);
+    const double cy = 0.5 * (y_min_ + y_max_);
+    const double cz = 0.5 * (z_min_ + z_max_);
+    const double dx = std::max(0.0, x_max_ - x_min_);
+    const double dy = std::max(0.0, y_max_ - y_min_);
+    const double dz = std::max(0.0, z_max_ - z_min_);
+
+    visualization_msgs::msg::MarkerArray arr;
+
+    // ── Solid translucent fill so the cropped volume is obvious in space ──
+    visualization_msgs::msg::Marker fill;
+    fill.header.frame_id = frame;
+    fill.header.stamp = stamp;
+    fill.ns = "crop_bounds";
+    fill.id = 0;
+    fill.type = visualization_msgs::msg::Marker::CUBE;
+    fill.action = visualization_msgs::msg::Marker::ADD;
+    fill.pose.position.x = cx;
+    fill.pose.position.y = cy;
+    fill.pose.position.z = cz;
+    fill.pose.orientation.w = 1.0;
+    fill.scale.x = dx;
+    fill.scale.y = dy;
+    fill.scale.z = dz;
+    fill.color.r = 0.0f;
+    fill.color.g = 0.85f;
+    fill.color.b = 1.0f;
+    fill.color.a = 0.15f;
+    arr.markers.push_back(fill);
+
+    // ── Wireframe edges (12 lines) so the box stays readable through the cloud ──
+    visualization_msgs::msg::Marker edges;
+    edges.header.frame_id = frame;
+    edges.header.stamp = stamp;
+    edges.ns = "crop_bounds";
+    edges.id = 1;
+    edges.type = visualization_msgs::msg::Marker::LINE_LIST;
+    edges.action = visualization_msgs::msg::Marker::ADD;
+    edges.pose.orientation.w = 1.0;
+    edges.scale.x = 0.003;   // line width (m)
+    edges.color.r = 0.0f;
+    edges.color.g = 1.0f;
+    edges.color.b = 1.0f;
+    edges.color.a = 1.0f;
+    auto add_edge = [&](double ax, double ay, double az,
+                        double bx, double by, double bz) {
+      geometry_msgs::msg::Point a; a.x = ax; a.y = ay; a.z = az;
+      geometry_msgs::msg::Point b; b.x = bx; b.y = by; b.z = bz;
+      edges.points.push_back(a);
+      edges.points.push_back(b);
+    };
+    // 4 bottom edges
+    add_edge(x_min_, y_min_, z_min_,  x_max_, y_min_, z_min_);
+    add_edge(x_max_, y_min_, z_min_,  x_max_, y_max_, z_min_);
+    add_edge(x_max_, y_max_, z_min_,  x_min_, y_max_, z_min_);
+    add_edge(x_min_, y_max_, z_min_,  x_min_, y_min_, z_min_);
+    // 4 top edges
+    add_edge(x_min_, y_min_, z_max_,  x_max_, y_min_, z_max_);
+    add_edge(x_max_, y_min_, z_max_,  x_max_, y_max_, z_max_);
+    add_edge(x_max_, y_max_, z_max_,  x_min_, y_max_, z_max_);
+    add_edge(x_min_, y_max_, z_max_,  x_min_, y_min_, z_max_);
+    // 4 vertical edges
+    add_edge(x_min_, y_min_, z_min_,  x_min_, y_min_, z_max_);
+    add_edge(x_max_, y_min_, z_min_,  x_max_, y_min_, z_max_);
+    add_edge(x_max_, y_max_, z_min_,  x_max_, y_max_, z_max_);
+    add_edge(x_min_, y_max_, z_min_,  x_min_, y_max_, z_max_);
+    arr.markers.push_back(edges);
+
+    pub_bounds_->publish(arr);
   }
 
   bool extract_non_planar(const CloudT & input, CloudT & output)
@@ -209,11 +314,21 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_cloud_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cropped_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_object_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_bounds_;
   rclcpp::Node::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 
   double x_min_, x_max_, y_min_, y_max_, z_min_, z_max_;
+  std::string last_frame_id_;
 };
 
+// Register as a composable node so the cropper can be loaded into a
+// ComposableNodeContainer (one process, intra-process comms with siblings).
+#include "rclcpp_components/register_node_macro.hpp"
+RCLCPP_COMPONENTS_REGISTER_NODE(CroppingPointCloud)
+
+#ifndef CROPPING_POINTCLOUD_BUILD_AS_COMPONENT_ONLY
+// Backwards-compatible standalone executable. The library form (above) is
+// what the composable-node launch files use.
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
@@ -221,3 +336,4 @@ int main(int argc, char ** argv)
   rclcpp::shutdown();
   return 0;
 }
+#endif

@@ -20,25 +20,30 @@ A ROS 2 node that crops an incoming `sensor_msgs/PointCloud2` against an axis-al
 
 ## Architecture
 
-**Two units.** The data source publishes `sensor_msgs/PointCloud2`; the cropper unit subscribes, filters, and shows the result. They communicate over DDS exactly the way a real distributed ROS 2 system would — same `network_mode: host`, same `ipc: host`, same `ROS_DOMAIN_ID`. To split across actual machines later, run the cropper on one box and the data-source on another, keeping `ROS_DOMAIN_ID` identical on both.
+**One default unit, one optional demo unit.** The cropper subscribes to a
+`sensor_msgs/PointCloud2` topic and waits — by default it does **not** start
+any data source. Plug in whatever you like (real sensor driver, `ros2 bag
+play`, another container on another host) and DDS auto-discovery does the
+rest. A bundled Gazebo scene is included as an opt-in **`demo` profile** so
+the pipeline can also be exercised end-to-end with a single command.
 
 ```
-┌──────────────────────────────────┐   /camera/rgb/points    ┌──────────────────────────────────────┐
-│ gazebo (data source)             │ ───────────────────────►│ cropper (perception + GUI)           │
-│   ─ Gazebo (Fortress / Harmonic) │   PointCloud2  (DDS)    │   ─ cropping_pointcloud node         │
-│     headless sim w/ GPU LiDAR    │                         │     (publishes /cropped_cloud,       │
-│   ─ ros_gz_bridge                │                         │      /object_cloud)                  │
-│                                  │                         │   ─ RViz2 (preset layout)            │
-│ swap with: real sensor driver,   │                         │   ─ rqt Dynamic Reconfigure sliders  │
-│ rosbag2 replay, etc.             │                         │                                      │
-└──────────────────────────────────┘                         └──────────────────────────────────────┘
-        docker/gazebo.Dockerfile                                     docker/cropper.Dockerfile
+                                /input topic              ┌──────────────────────────────────────┐
+  any data source ────────────────────────────────────────► cropper (perception + GUI)           │
+  (sensor driver, rosbag, gz)   PointCloud2 (DDS)         │   ─ cropping_pointcloud node         │
+                                                          │     (publishes /cropped_cloud,       │
+                                                          │      /object_cloud)                  │
+                                                          │   ─ RViz2 (preset layout)            │
+  ── opt-in: `--profile demo` ──                          │   ─ rqt Dynamic Reconfigure sliders  │
+  gazebo (Fortress / Harmonic) ─►                         │                                      │
+  headless gpu_lidar_sensor.sdf                           └──────────────────────────────────────┘
+                                                                  docker/cropper.Dockerfile
 ```
 
-| Service | Image | Purpose |
-|---|---|---|
-| `gazebo`  | `cropping_pointcloud/gazebo`  | Headless Gazebo (`gpu_lidar_sensor.sdf`) + `parameter_bridge`. Emits `sensor_msgs/PointCloud2` on `/camera/rgb/points`. Replace with any publisher of the same topic. |
-| `cropper` | `cropping_pointcloud/cropper` | One launch file (`cropping_demo.launch.py`) starts: the cropping node (publishes `/cropped_cloud` + `/object_cloud`), RViz2 with the bundled layout, rqt Dynamic Reconfigure pinned to the node. Built on `osrf/ros:*-desktop-full` so PCL + RViz are already present — only `rqt_reconfigure` is added. |
+| Service | Profile | Image | Purpose |
+|---|---|---|---|
+| `cropper` | *default* | `cropping_pointcloud/cropper` | One launch file (`cropping_demo.launch.py`) starts: the cropping node (publishes `/cropped_cloud` + `/object_cloud`), RViz2 with the bundled layout, rqt Dynamic Reconfigure pinned to the node. Built on `osrf/ros:*-desktop-full` so PCL + RViz are already present — only `rqt_reconfigure` is added. |
+| `gazebo`  | `demo`    | `cropping_pointcloud/gazebo`  | Headless Gazebo (`gpu_lidar_sensor.sdf`) + `parameter_bridge`. Emits `sensor_msgs/PointCloud2` on `/camera/rgb/points`. Only runs when `--profile demo` is active. |
 
 ## Tested platforms
 
@@ -76,30 +81,159 @@ cd cropping_pointcloud
 # 2. allow X11 from containers (once per host login session)
 xhost +local:docker
 
-# 3. build the two images
-#    - cropper: ~30 s (FROM osrf/ros:*-desktop-full, only adds rqt_reconfigure + colcon build)
-#    - gazebo:  ~5 min first time (Ignition Fortress is the slow apt install)
+# 3. build the cropper image (the default service)
+#    ~30 s — FROM osrf/ros:*-desktop-full, only adds rqt_reconfigure + colcon build
 docker compose build
 
-# 4. bring up the stack
+# 4. bring up the cropper
 docker compose up -d        # detached, so the same shell is free to inspect topics
-docker compose logs -f      # tail logs from both services (Ctrl+C to stop tailing)
+docker compose logs -f      # tail logs (Ctrl+C to stop tailing)
 ```
 
-**Three windows pop up on your screen:**
+That brings up **only the cropper**. Two windows pop up:
 
-1. **Gazebo (the data source)** — 3D view of `gpu_lidar_sensor.sdf`: a `model_with_lidar` chassis at world (4, 0, 0.5) facing −X, a 1 m³ obstacle box at (0, −1, 0.5), a small box at (0.05, 0.05, 0.05), and the OpenRobotics Playground model at the origin. The simulation is already unpaused.
-2. **RViz2 (the consumer)** — preset layout from `rviz/cropping_pointcloud.rviz`. Fixed Frame is `model_with_lidar/link/gpu_lidar`. Three PointCloud2 displays already added: white = `/camera/rgb/points` (raw lidar), red = `/cropped_cloud`, green = `/object_cloud` after RANSAC plane removal.
-3. **rqt Dynamic Reconfigure (the operator console)** — pinned to the `/cropping_pointcloud` node. Sliders for `x_min`/`x_max`/`y_*`/`z_*`/`plane_distance_threshold`/`plane_max_iterations`. Drag a slider; the red cloud in RViz reshapes immediately.
+1. **RViz2 (the consumer)** — preset layout from `rviz/cropping_pointcloud.rviz`. Three PointCloud2 displays already added: white = the raw input, red = `/cropped_cloud`, green = `/object_cloud` after RANSAC plane removal. The white display will be empty until you connect a publisher.
+2. **rqt Dynamic Reconfigure (the operator console)** — pinned to the `/cropping_pointcloud` node. Sliders for `x_min`/`x_max`/`y_*`/`z_*`/`plane_distance_threshold`/`plane_max_iterations`. Drag a slider; the red cloud in RViz reshapes the moment data starts flowing.
+
+The cropper is now subscribed and waiting. Point any publisher at its
+`input_topic` parameter and the pipeline lights up.
+
+---
+
+## Connecting a data source
+
+The cropper is sensor-agnostic. Pick one of the recipes below — or write
+your own publisher and remap `input_topic` to whatever it emits.
+
+### Option A — bundled Gazebo demo (no extra hardware)
+
+Self-contained simulation; useful for first-run sanity checks.
+
+```bash
+# build the Gazebo image (~5 min first time — Ignition Fortress apt install)
+docker compose --profile demo build gazebo
+
+# bring up cropper + gazebo together
+docker compose --profile demo up -d
+docker compose --profile demo logs -f
+```
+
+This adds the headless `gpu_lidar_sensor.sdf` scene (a `model_with_lidar`
+chassis at world (4, 0, 0.5) facing −X, a 1 m³ obstacle box at (0, −1, 0.5),
+a small box at (0.05, 0.05, 0.05), and the OpenRobotics Playground model)
+plus a `ros_gz_bridge` republishing the GPU lidar on `/camera/rgb/points`.
+The cropper's preset RViz layout uses Fixed Frame
+`model_with_lidar/link/gpu_lidar`, so the raw cloud appears immediately.
+
+### Option B — PMD flexx2 (or other PMD ToF cameras)
+
+For the [`pmd-royale-ros`](https://github.com/pmdtechnologies/pmd-royale-ros)
+ROS 2 driver. The repo ships `launch/pmd_cropper.launch.py` and
+`rviz/pmd_cropper.rviz`, both pre-tuned for a small object on a desk
+~30 cm in front of the lens (PMD optical-frame conventions; sensible
+±15 cm × ±20 cm × 15–60 cm AABB).
+
+```bash
+# 1. start the PMD driver — see <repo>/docker/pmd/ for the dockerfile.
+#    publishes /pmd_royale_ros_camera_node/point_cloud_0
+docker compose -f ~/ros2_ws/docker/pmd/compose.yml up -d
+
+# 2. start the cropper with the PMD-specific launch file
+docker compose run --rm cropper \
+  ros2 launch cropping_pointcloud pmd_cropper.launch.py
+```
+
+Or use the bundled combined stack at `~/ros2_ws/docker/pmd-cropper/` which
+wires both containers together with one `docker compose up`.
+
+### Option B+ — PMD with single-process composition (zero-copy)
+
+The Option B recipe runs the PMD driver and the cropper as **two separate
+processes** that exchange `PointCloud2` messages over DDS. That serializes
+on the publisher side and deserializes on the subscriber side. For a
+224 × 172 ToF cloud at 30 Hz the cost is small, but for an HD lidar or a
+dense RGB-D it adds up.
+
+ROS 1 had a workaround called **nodelets**: load the publisher and
+subscriber into one *nodelet manager* and they pass each other shared
+pointers, no serialization. The ROS 2 equivalent is **components +
+intra-process communication**:
+
+* every node that wants to participate is built as a *composable node*
+  (a shared library that registers itself with `rclcpp_components`);
+* a `ComposableNodeContainer` (single process, multi-threaded executor)
+  loads them both;
+* each is loaded with `extra_arguments=[{'use_intra_process_comms': True}]`;
+* publishers must use `volatile` durability (transient_local is rejected
+  by the intra-process path).
+
+The `cropping_pointcloud` package ships **both forms** — the standalone
+executable for the simple two-container setup, and a shared library
+(`libcropping_pointcloud_component.so`, registered as `CroppingPointCloud`)
+for composition.
+
+To run the PMD driver and the cropper in a single process:
+
+```bash
+cd ~/ros2_ws/docker/pmd-cropper
+
+# build a unified image that has libpmd_royale_ros_node.so
+# AND libcropping_pointcloud_component.so
+docker compose --profile intraproc build
+
+# bring it up
+xhost +local:root
+docker compose --profile intraproc up
+```
+
+That launches `ros2 launch cropping_pointcloud pmd_cropper_intraproc.launch.py`
+which spins one `component_container_mt` with three composable nodes:
+the static TF publisher, the PMD camera node, and the cropper. The
+`PointCloud2` messages move from driver to cropper as moved
+`unique_ptr`s — no DDS hop.
+
+Verify the speedup with `top` (one process instead of two) and
+`ros2 topic hz /cropped_cloud` (rate matches the source, regardless of
+network DDS settings).
+
+### Option C — your own ROS 2 publisher (real driver, rosbag, etc.)
+
+```bash
+# default cropper: subscribes to camera/rgb/points
+docker compose up -d
+
+# point any publisher at that topic. e.g. replay a bag from the host:
+docker run --rm -it --net=host \
+  -v /path/to/bag:/bag \
+  osrf/ros:humble-desktop-full \
+  bash -lc 'source /opt/ros/humble/setup.bash &&
+            ros2 bag play /bag --remap /your/topic:=/camera/rgb/points'
+```
+
+Or remap on the cropper side:
+
+```bash
+docker compose exec cropper bash -lc \
+  'source /opt/ros/humble/setup.bash &&
+   ros2 param set /cropping_pointcloud input_topic /your/sensor/topic'
+```
+
+Same DDS bus, same `ROS_DOMAIN_ID` — that's all the discovery needs. If the
+publisher lives on another machine, just match `ROS_DOMAIN_ID` and (for
+networks that drop multicast) configure Cyclone DDS unicast or
+[`rmw_zenoh`](https://github.com/ros2/rmw_zenoh).
 
 ### Verify the data flow
+
+These checks assume a publisher is feeding the cropper. Run with the demo
+profile (`docker compose --profile demo up -d`) for a self-contained example.
 
 ```bash
 # topics that exist (run from a host shell while the stack is up)
 docker compose exec cropper bash -lc \
   'source /opt/ros/humble/setup.bash && ros2 topic list'
 
-# rate (should be ~10 Hz)
+# rate (should be ~10 Hz with the bundled demo)
 docker compose exec cropper bash -lc \
   'source /opt/ros/humble/setup.bash && timeout 5 ros2 topic hz /cropped_cloud'
 
@@ -112,7 +246,7 @@ docker compose exec cropper bash -lc \
    done'
 ```
 
-Expected:
+Expected (with the `demo` profile feeding the bundled lidar):
 ```
 /camera/rgb/points  width=640        (× height=16 = 10 240 points, organized lidar)
 /cropped_cloud      width=6 800-ish  (after AABB crop in lidar frame)
@@ -134,8 +268,9 @@ docker compose exec cropper bash -lc \
 Tear down:
 
 ```bash
-docker compose down               # stop both containers
-docker compose down --rmi local   # also delete the two locally-built images
+docker compose down                       # stops the cropper
+docker compose --profile demo down        # also stops gazebo if it's running
+docker compose --profile demo down --rmi local   # also delete locally-built images
 ```
 
 ### GPU acceleration
@@ -200,14 +335,46 @@ docker compose exec cropper bash -c \
 
 ---
 
+## Coordinate frames in RViz (axis flip)
+
+Camera drivers — including PMD's — publish point clouds in an *optical
+frame* (REP-103 convention: **X right, Y down, Z forward**). That is the
+right convention for the data, but RViz's grid is laid out as if the world
+followed the *robot* convention (**X forward, Y left, Z up**), so depth
+appearing along the world's vertical axis can look upside-down.
+
+The PMD driver also broadcasts a static TF from the camera's
+**link** frame (robot convention) to its **optical_frame**:
+
+```
+pmd_royale_ros_camera_node_link  →  pmd_royale_ros_camera_node_optical_frame
+```
+
+So the fix is purely a RViz display setting — change **Global Options →
+Fixed Frame** to the link frame. RViz applies the static TF on render and
+the cloud appears with depth along world-X.
+
+The bundled `pmd_cropper.rviz` already defaults to the link frame. To go
+back to the optical frame, use the dropdown in RViz's Displays panel
+(`Global Options → Fixed Frame`) — no rebuild, no parameter change.
+
+There is intentionally **no rqt parameter for this** because Fixed Frame
+isn't a ROS parameter; it's part of the RViz display config (saved into
+the `*.rviz` YAML).
+
+---
+
 ## Splitting across machines (real-world deployment)
 
-The compose file is one rehearsal of a multi-host system. The two units can run on different physical machines:
+The default compose layout — cropper alone, no bundled data source — already
+*is* the multi-host case. Run the cropper on your operator workstation, run
+the publisher (a sensor driver, the bundled Gazebo demo, a `ros2 bag play`
+process, …) on a robot, NVIDIA Jetson, or another machine.
 
-1. **Data-source box** (a robot, an NVIDIA Jetson, the Gazebo machine, …) — runs the `gazebo` service (or your real sensor driver).
-2. **Operator workstation** (your laptop, a desktop) — runs the `cropper` service (which includes RViz + rqt).
+1. **Data-source box** — runs your real sensor driver, the `gazebo` service via `--profile demo`, or any other publisher.
+2. **Operator workstation** (your laptop, a desktop) — runs the default `cropper` service (which includes RViz + rqt).
 
-Put the same `ROS_DOMAIN_ID` and `RMW_IMPLEMENTATION` on every machine. As long as DDS multicast traverses the network (or you configure unicast peer discovery), the cropper sees the data source — that's the whole point of ROS 2's transport layer. The cropping node subscribes to `/camera/rgb/points` regardless of which physical box publishes it.
+Put the same `ROS_DOMAIN_ID` and `RMW_IMPLEMENTATION` on every machine. As long as DDS multicast traverses the network (or you configure unicast peer discovery), the cropper sees the data source — that's the whole point of ROS 2's transport layer. The cropping node subscribes to its `input_topic` regardless of which physical box publishes it.
 
 > **Multicast caveat:** corporate switches and Wi-Fi often drop multicast. The standard fix is either Cyclone DDS with explicit `CYCLONEDDS_URI` peer config, or [`rmw_zenoh`](https://github.com/ros2/rmw_zenoh)'s discovery server.
 
@@ -220,6 +387,14 @@ Put the same `ROS_DOMAIN_ID` and `RMW_IMPLEMENTATION` on every machine. As long 
 | in  | `camera/rgb/points` (default; remappable via `input_topic` param) | `sensor_msgs/msg/PointCloud2` | `SensorDataQoS` |
 | out | `cropped_cloud` | `sensor_msgs/msg/PointCloud2` | `SensorDataQoS` |
 | out | `object_cloud` | `sensor_msgs/msg/PointCloud2` | `SensorDataQoS` (only when `extract_object=true`) |
+| out | `crop_bounds`  | `visualization_msgs/msg/MarkerArray` | `Reliable` + `TransientLocal` |
+
+The `crop_bounds` topic carries two live markers — a translucent cube
+filling the AABB and its 12 wireframe edges. The bundled RViz configs
+already display them, so when you drag a bound in rqt the box reshapes
+on the next slider release. Combined with the TF axes display (also on by
+default) you can see the camera origin and the slab the node is keeping
+side-by-side in the same view.
 
 ## Parameters
 
