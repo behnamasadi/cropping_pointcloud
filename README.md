@@ -20,6 +20,10 @@ with the sliders.
 |---|---|---|
 | ![raw lidar in RViz](images/raw.png) | ![cropped lidar in RViz](images/cropped.png) | ![object cloud in RViz](images/object.png) |
 
+
+![live bounding box in rviz](images/bounding_box_rviz.gif)
+
+
 > The original ROS 1 (Kinetic/Noetic) implementation is preserved as the
 > git tag **`ros1-legacy`**.
 
@@ -196,8 +200,27 @@ and uses `rviz/pmd_cropper.rviz` (link-frame view, desk-scale orbit).
 
 #### Terminal B — start the PMD camera driver
 
+The cropper in Terminal A already runs RViz, so Terminal B only needs to
+publish the point cloud — no second RViz. The PMD package ships two
+launch files for exactly this split:
+
+| Launch file | What it runs | Use when |
+|---|---|---|
+| `any_camera.launch.py`      | driver only          | Pairing with the cropper (this example) — recommended |
+| `any_camera_rviz.launch.py` | driver + RViz        | Standalone driver sanity check, no cropper |
+
+Driver only (recommended, pairs with the cropper's RViz in Terminal A):
+
+```bash
+docker compose -f ~/ros2_ws/docker/pmd/compose.yml run --rm pmd \
+  ros2 launch pmd_royale_ros_examples any_camera.launch.py
+```
+
+Driver + its own RViz (standalone, no cropper):
+
 ```bash
 docker compose -f ~/ros2_ws/docker/pmd/compose.yml up
+# the compose's default CMD is `any_camera_rviz.launch.py`
 ```
 
 (or substitute your own launch / driver — anything that publishes the
@@ -212,6 +235,10 @@ docker compose exec cropper bash -lc \
    ros2 topic hz /cropped_cloud'
 # both should hit ~30 Hz
 ```
+
+
+![live bounding box in rviz](images/pmd_cropped.gif)
+
 
 ---
 
@@ -464,17 +491,6 @@ rejects `transient_local`.
 
 ---
 
-## Troubleshooting
-
-### General
-
-| Symptom | Fix |
-|---|---|
-| `cannot connect to display :0` | Re-run `xhost +local:docker` (or `xhost +local:root` for the PMD compose) on the host. Resets on host logout/reboot. |
-| RViz black or crashes on GL init | NVIDIA Container Toolkit not configured. Verify `docker run --rm --gpus all ubuntu:22.04 nvidia-smi` works. Last resort: `LIBGL_ALWAYS_SOFTWARE=1` in `rviz`'s environment. |
-| rqt slider exists but moving it does nothing | The on-set callback only fires after the cropper finishes initializing. `docker compose logs cropper` should show `subscribed to '<topic>'…` before tuning works. |
-| `Crop Bounds` markers don't appear in RViz | Either the cropper hasn't received its first cloud yet (the marker is published from the cloud callback), or RViz's view is pointed away from the box. Reset the orbit camera (RViz: `Reset` button) or check the publisher is alive with `ros2 topic hz /crop_bounds`. |
-| Two containers on different hosts can't see each other | DDS multicast doesn't traverse most switches. Set `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` and a `CYCLONEDDS_URI` peer file, or use `rmw_zenoh`. |
 
 ### Gazebo demo (Example 1)
 
