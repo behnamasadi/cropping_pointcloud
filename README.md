@@ -41,7 +41,7 @@ auto-discovery does the rest.
                                  input topic                ┌──────────────────────────────────────┐
    any PointCloud2 publisher  ───────────────────────────►  │ cropper (perception + GUI)           │
    ─ Gazebo (demo profile)        DDS  /  intra-process     │   ─ cropping_pointcloud node         │
-   ─ PMD flexx2 driver                                      │     publishes /cropped_cloud,        │
+   ─ 3D ToF camera driver                                   │     publishes /cropped_cloud,        │
    ─ rosbag2 / real driver                                  │                /object_cloud,        │
                                                             │                /crop_bounds (markers)│
                                                             │   ─ RViz2 (preset layout)            │
@@ -59,7 +59,7 @@ Two flavours of "publisher + subscriber in the same room" are supported:
   with the publisher in one `ComposableNodeContainer` with
   `use_intra_process_comms=True` and `PointCloud2` messages are moved by
   `unique_ptr` — no serialization, no DDS round-trip. See
-  [Example 3](#example-3--pmd-with-single-process-composition-zero-copy).
+  [Example 3](#example-3--tof-camera-with-single-process-composition-zero-copy).
 
 | Service | Profile | Image | Purpose |
 |---|---|---|---|
@@ -169,24 +169,26 @@ docker compose --profile demo down
 
 ---
 
-### Example 2 — PMD flexx2 ToF camera (or other PMD modules)
+### Example 2 — 3D ToF camera
 
-For the [`pmd-royale-ros`](https://github.com/pmdtechnologies/pmd-royale-ros)
-ROS 2 driver. The repo ships `launch/pmd_cropper.launch.py` and
+Tested with the [`pmd-royale-ros`](https://github.com/pmdtechnologies/pmd-royale-ros)
+ROS 2 driver as a representative 3D ToF camera, but anything that
+publishes a `sensor_msgs/PointCloud2` from a depth/ToF sensor works the
+same way. The repo ships `launch/pmd_cropper.launch.py` and
 `rviz/pmd_cropper.rviz`, both pre-tuned for a small object on a desk
-~30 cm in front of the lens (PMD optical-frame conventions; AABB defaults
-±15 cm × ±20 cm × 15–60 cm; RViz Fixed Frame already set to the camera
-**link** frame so depth renders horizontally — see
+~30 cm in front of the lens (REP-103 optical-frame conventions; AABB
+defaults ±15 cm × ±20 cm × 15–60 cm; RViz Fixed Frame already set to the
+camera **link** frame so depth renders horizontally — see
 [Coordinate frames](#coordinate-frames-in-rviz-axis-flip)).
 
-> The PMD driver itself has its own docker setup (Royale SDK, USB
+> The ToF camera driver itself has its own docker setup (vendor SDK, USB
 > permissions, hot-plug handling) which lives outside this repo. A
 > reference setup is documented at `~/ros2_ws/docker/pmd/` on the
 > author's machine; use that as a template or substitute the upstream
 > driver however you prefer. Just make sure something publishes
 > `/pmd_royale_ros_camera_node/point_cloud_0`.
 
-#### Terminal A — start the cropper using the PMD-specific launch file
+#### Terminal A — start the cropper using the ToF-specific launch file
 
 ```bash
 cd cropping_pointcloud
@@ -195,13 +197,14 @@ docker compose run --rm cropper \
 ```
 
 This swaps the cropper's `input_topic` to
-`/pmd_royale_ros_camera_node/point_cloud_0`, loads the PMD-tuned bounds,
-and uses `rviz/pmd_cropper.rviz` (link-frame view, desk-scale orbit).
+`/pmd_royale_ros_camera_node/point_cloud_0`, loads the desk-scale tuned
+bounds, and uses `rviz/pmd_cropper.rviz` (link-frame view, desk-scale
+orbit).
 
-#### Terminal B — start the PMD camera driver
+#### Terminal B — start the ToF camera driver
 
 The cropper in Terminal A already runs RViz, so Terminal B only needs to
-publish the point cloud — no second RViz. The PMD package ships two
+publish the point cloud — no second RViz. The driver package ships two
 launch files for exactly this split:
 
 | Launch file | What it runs | Use when |
@@ -242,7 +245,7 @@ docker compose exec cropper bash -lc \
 
 ---
 
-### Example 3 — PMD with single-process composition (zero-copy)
+### Example 3 — ToF camera with single-process composition (zero-copy)
 
 The two-container approach in Example 2 exchanges `PointCloud2` messages
 over DDS — that costs a serialize / deserialize on every frame. For a
@@ -284,7 +287,7 @@ ros2 launch cropping_pointcloud pmd_cropper_intraproc.launch.py
 ```
 
 — a single `component_container_mt` with three composable nodes (static
-TF, PMD camera, cropper). `PointCloud2` messages move from driver to
+TF, ToF camera, cropper). `PointCloud2` messages move from driver to
 cropper as moved `unique_ptr`s. Verify with:
 
 ```bash
@@ -347,13 +350,13 @@ docker compose exec cropper bash -lc \
 
 ## Coordinate frames in RViz (axis flip)
 
-Camera drivers — including PMD's — publish point clouds in an *optical
-frame* (REP-103 convention: **X right, Y down, Z forward**). RViz's grid
-is laid out as if the world followed the *robot* convention (**X forward,
+ToF / depth camera drivers publish point clouds in an *optical frame*
+(REP-103 convention: **X right, Y down, Z forward**). RViz's grid is
+laid out as if the world followed the *robot* convention (**X forward,
 Y left, Z up**), so depth-along-Z appears vertical and the scene looks
 upside-down.
 
-The PMD driver also broadcasts a static TF from the camera's **link**
+The driver also broadcasts a static TF from the camera's **link**
 frame (robot convention) to its **optical_frame**:
 
 ```
@@ -381,8 +384,8 @@ The package ships three launch files, one per recipe:
 | File | Use case | Bounds preset | RViz config |
 |---|---|---|---|
 | `cropping_demo.launch.py`         | Gazebo demo (Example 1) | x[−2, 8], y[−5, 5], z[−1, 2] m  | `cropping_pointcloud.rviz` |
-| `pmd_cropper.launch.py`           | PMD camera, two-process (Example 2) | x[−0.15, 0.15], y[−0.20, 0.20], z[0.15, 0.60] m | `pmd_cropper.rviz` |
-| `pmd_cropper_intraproc.launch.py` | PMD camera, single-process (Example 3) | same desk-scale | `pmd_cropper.rviz` |
+| `pmd_cropper.launch.py`           | ToF camera, two-process (Example 2) | x[−0.15, 0.15], y[−0.20, 0.20], z[0.15, 0.60] m | `pmd_cropper.rviz` |
+| `pmd_cropper_intraproc.launch.py` | ToF camera, single-process (Example 3) | same desk-scale | `pmd_cropper.rviz` |
 
 All three accept `gui:=false` to skip RViz + rqt for headless deployment:
 
@@ -499,7 +502,7 @@ rejects `transient_local`.
 | `parameter_bridge` runs but `ros2 topic hz /camera/rgb/points` is silent | Gazebo started paused. The entrypoint passes `-r` so this shouldn't happen — check `docker compose logs gazebo` for crashes, particularly libEGL warnings that escalate to errors. |
 | Cropped cloud is empty even with wide bounds | The lidar `frame_id` is `model_with_lidar/link/gpu_lidar`; bounds are interpreted in **that** frame, not world. Sensor is at world (4, 0, 0.5) facing −X, so the obstacle box at world (0, −1, 0.5) sits at lidar-local x≈4. The defaults already account for this. |
 
-### PMD camera (Examples 2 and 3)
+### ToF camera (Examples 2 and 3)
 
 | Symptom | Fix |
 |---|---|
