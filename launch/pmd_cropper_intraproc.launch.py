@@ -18,7 +18,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import AndSubstitution, LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
 
@@ -28,6 +28,7 @@ def generate_launch_description():
     rviz_cfg = os.path.join(pkg_share, "rviz", "pmd_cropper.rviz")
 
     gui = LaunchConfiguration("gui")
+    graph = LaunchConfiguration("graph")
     intra = {"use_intra_process_comms": True}
 
     container = ComposableNodeContainer(
@@ -85,6 +86,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "gui", default_value="true",
             description="Launch RViz2 + rqt alongside the components"),
+        DeclareLaunchArgument(
+            "graph", default_value="true",
+            description="Also launch rqt_graph to visualize node/topic connections"),
 
         container,
 
@@ -100,5 +104,11 @@ def generate_launch_description():
                  "--args", "/cropping_pointcloud"],
             output="screen",
             condition=IfCondition(gui),
+        ),
+
+        ExecuteProcess(
+            cmd=["rqt_graph"],
+            output="screen",
+            condition=IfCondition(AndSubstitution(gui, graph)),
         ),
     ])

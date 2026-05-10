@@ -21,6 +21,9 @@ with the sliders.
 | ![raw lidar in RViz](images/raw.png) | ![cropped lidar in RViz](images/cropped.png) | ![object cloud in RViz](images/object.png) |
 
 
+
+![rqt_graph](images/rqt_graph.png)
+
 ![live bounding box in rviz](images/bounding_box_rviz.gif)
 
 
@@ -109,7 +112,7 @@ docker compose build
 docker compose up
 ```
 
-Three windows pop up:
+Four windows pop up:
 
 1. **RViz2** — preset layout from `rviz/cropping_pointcloud.rviz`. Five
    displays: TF axes, the live `Crop Bounds` (cyan box + wireframe), and
@@ -119,7 +122,15 @@ Three windows pop up:
 2. **rqt Dynamic Reconfigure** — pinned to the `/cropping_pointcloud` node.
    Sliders for the six bounds, RANSAC distance threshold, RANSAC iteration
    cap. Drag a slider; the cyan AABB in RViz reshapes immediately.
-3. **(Optional) Gazebo** — only if you started it via `--profile demo`.
+3. **rqt_graph** — live node/topic graph: who publishes what, who
+   subscribes. Switch the dropdown to **Nodes/Topics (all)** and untick
+   *Hide → Dead sinks / Leaf topics / Debug* to see the full picture.
+   Hit the refresh button after starting a publisher (Terminal B in the
+   examples) so the new node and its edges show up.
+4. **(Optional) Gazebo** — only if you started it via `--profile demo`.
+
+Pass `graph:=false` (or `gui:=false` for fully headless) to any launch
+file to suppress windows.
 
 ---
 
@@ -387,11 +398,21 @@ The package ships three launch files, one per recipe:
 | `pmd_cropper.launch.py`           | ToF camera, two-process (Example 2) | x[−0.15, 0.15], y[−0.20, 0.20], z[0.15, 0.60] m | `pmd_cropper.rviz` |
 | `pmd_cropper_intraproc.launch.py` | ToF camera, single-process (Example 3) | same desk-scale | `pmd_cropper.rviz` |
 
-All three accept `gui:=false` to skip RViz + rqt for headless deployment:
+All three accept two GUI knobs:
+
+| Arg | Default | Effect |
+|---|---|---|
+| `gui`   | `true` | RViz2 + rqt_reconfigure + rqt_graph. Set `false` for fully headless. |
+| `graph` | `true` | rqt_graph window (node/topic connectivity view). Set `false` to keep RViz + sliders but skip the graph. Ignored when `gui:=false`. |
 
 ```bash
+# fully headless
 docker compose run --rm cropper \
   ros2 launch cropping_pointcloud pmd_cropper.launch.py gui:=false
+
+# RViz + sliders, but no graph window
+docker compose run --rm cropper \
+  ros2 launch cropping_pointcloud pmd_cropper.launch.py graph:=false
 ```
 
 ### `.env`
